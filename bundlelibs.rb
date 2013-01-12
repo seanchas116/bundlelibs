@@ -4,225 +4,117 @@ require 'fileutils'
 require 'optparse'
 
 
-def extract_install_names(binary_path)
-	
-	lines = Array.new
-	
-	IO.popen("otool -L #{binary_path}") do |io|
-		
-		io.each do |line|
-			lines << line
-		end
+class Binary
+
+	def initialize(path)
+
+		@path = path
+
 	end
+
+	def path()
+		return @path
+	end
+
+	def copy!(dst)
+
+		FileUtils.cp(@path, dst)
+		@path = dst
+
+	end
+
+	def dylib?()
+		return /.dylib$/ =~ @path ? true : false
+	end
+
+	def system_lib?()
+		return Regexp.new("^/usr/lib") =~ @path ? true : false
+	end
+
+	def relative?()
+		return Regexp.new("^/") =~ @path ? false : true
+	end
+
+	def dependency_libs()
+
+		lines = Array.new
 	
-	install_names = Array.new
-	
-	if lines.size != 0
-		
-		lines.drop(1).each do |line|
+		IO.popen("otool -L #{@path}") do |io|
 			
-			if line.size != 0
-				install_names << line.split[0]
+			io.each do |line|
+				lines << line
 			end
 		end
-	end
-	
-	return install_names
-	
-end
-
-def get_framework_path(lib_path)
-	
-	match_list = lib_path.scan(/^.+\.framework/)
-	return match_list.empty? ? nil : match_list[0]
-	
-end
-
-def is_dylib(lib_path)
-	
-	return /.dylib$/ =~ lib_path ? true : false
-	
-end
-
-def is_framework(lib_path)
-	
-	return /^.+\.framework/ =~ lib_path ? true : false
-	
-end
-
-def is_lib_need_to_bundle(lib_path)
-	
-	# relative path
-	if not Regexp.new("^/") =~ lib_path
-		return false
-	end
-	
-	#system libs 
-	if Regexp.new("^/usr/lib") =~ lib_path
-		return false
-	end
-	
-	#system libs
-	if Regexp.new("^/System/Library/Frameworks") =~ lib_path
-		return false
-	end
-	
-	# nothing to be done
-	if /^@executable_path/ =~ lib_path
-		return false
-	end
-	
-	return true
-	
-end
-
-def change_install_name_lib(binary, before, after)
-	`install_name_tool -change #{before} #{after} #{binary}`
-end
-
-def change_install_name_id(binary, after)
-	`install_name_tool -id #{after} #{binary}`
-end
-
-def get_relative_install_name(dst, executable_path)
-	
-	relative_pathname = Pathname.new(dst).relative_path_from(Pathname.new(executable_path))
-	return "@executable_path/" + relative_pathname.to_s
-	
-end
-
-def get_dst_path(src, dst_dir)
-	
-	src_pathname = Pathname.new(src)
-	dst_pathname = Pathname.new(dst_dir)
-	
-	return (dst_pathname + src_pathname.basename).to_s
-	
-end
-
-def get_dst_path_framework(src, dst_dir)
-	
-	src_inner_path = src.scan(Regexp.new("[^/]*\.framework.*"))[0]
-	dst_pathname = Pathname.new(dst_dir)
-	
-	return (dst_pathname + src_inner_path).to_s
-	
-end
-
-def bundle_dylib(src, dst_dir, executable_path)
-	
-	dst = get_dst_path(src, dst_dir)
-	
-	if not Pathname.new(src).exist?
-		raise "dylib not found"
-	end
-	
-	if Pathname.new(dst).exist?
-		raise "dylib already exists in destination"
-	end
-	
-	FileUtils.cp(src, dst)
-	FileUtils.chmod(0644, dst)
-	change_install_name_id(dst, get_relative_install_name(dst, executable_path))
-	
-end
-
-def bundle_framework(src, dst_dir, executable_path)
-	
-	dst = get_dst_path_framework(src, dst_dir)
-	
-	if not Pathname.new(get_framework_path(src)).exist?
-		raise "framework not found"
-	end
-	
-	if Pathname.new(get_framework_path(dst)).exist?
-		raise "framework already exists"
-	end
-	
-	FileUtils.cp_r(get_framework_path(src), dst_dir)
-	FileUtils.chmod(0644, dst)
-	change_install_name_id(dst, get_relative_install_name(dst, executable_path))
-	
-end
-
-$already_bundled_list = Array.new
-
-def is_already_included(name)
-	
-	$already_bundled_list.each do |bundled|
 		
-		if bundled == name
-			return true
-		end
+		install_names = Array.new
 		
-	end
-	
-	return false
-	
-end
-
-def add_already_included_lib(name)
-	
-	$already_bundled_list << name
-	
-end
-
-$bundled_lib_src_names = []
-
-def bundle_used_libs(binary, bundle_dir, executable_path)
-	
-	extract_install_names(binary).each do |name|
-		
-		if is_lib_need_to_bundle(name)
+		if lines.size != 0
 			
-			if is_dylib(name)
+			lines.drop(1).each do |line|
 				
-				$bundled_lib_src_names = $bundled_lib_src_names | [name]
-				
-				dst_name = get_dst_path(name, bundle_dir)
-				change_install_name_lib(binary, name, get_relative_install_name(dst_name, executable_path))
-				
-				if not is_already_included(dst_name)
-					
-					bundle_dylib(name, bundle_dir, executable_path)
-					add_already_included_lib(dst_name)
-					bundle_used_libs(dst_name, bundle_dir, executable_path)
-					
+				if line.size != 0
+					install_names << line.split[0]
 				end
-				
 			end
-			
-			if is_framework(name)
-				
-				$bundled_lib_src_names = $bundled_lib_src_names | [name]
-				
-				dst_name = get_dst_path_framework(name, bundle_dir)
-				change_install_name_lib(binary, name, get_relative_install_name(dst_name, executable_path))
-				
-				if not is_already_included(dst_name)
-					
-					bundle_framework(name, bundle_dir, executable_path)
-					add_already_included_lib(dst_name)
-					bundle_used_libs(dst_name, bundle_dir, executable_path)
-	
+		end
+		
+		return install_names
+
+	end
+
+	def change_install_name(before, after)
+		`install_name_tool -change #{before} #{after} #{@path}`
+	end
+
+	def get_dst_path(src, dst_dir)
+
+		src_pathname = Pathname.new(src)
+		dst_pathname = Pathname.new(dst_dir)
+		
+		return (dst_pathname + src_pathname.basename).to_s
+
+	end
+
+	def get_relative_install_name(dst, executable_dir)
+		return "@executable_path/" + Pathname.new(dst).relative_path_from(Pathname.new(executable_dir)).to_s
+	end
+
+	def bundle_dependency_libs(dst_dir, executable_dir, already_bundled_list)
+
+		dependency_libs().each do |src|
+
+			lib = Binary.new(src)
+
+			if lib.dylib? && !lib.system_lib? && !lib.relative?
+
+				dst = get_dst_path(src, dst_dir)
+				change_install_name(src, get_relative_install_name(dst, executable_dir))
+
+				if !already_bundled_list.include?(src) && dst != @path
+
+					lib.copy!(dst)
+					FileUtils.chmod(0664, dst)
+					lib.bundle_dependency_libs(dst_dir, executable_dir, already_bundled_list)
+					puts src
+					already_bundled_list << src
+
 				end
-								
 			end
 		end
 	end
-	
+
 end
 
 def main
 	
-	app_pathname = nil
+	binary_pathname = nil
 	bundle_pathname = nil
 	
 	OptionParser.new do |opts|
 		
 		opts.banner = "Usage: bundlelibs.rb -x [binary filepath] -d [destination directory path]"
 		opts.on("-x BINARY_PATH") do |path|
-			app_pathname = Pathname.new(path)
+			binary_pathname = Pathname.new(path)
 		end 
 		opts.on("-d DESTINATION_PATH") do |path|
 			bundle_pathname = Pathname.new(path)
@@ -231,7 +123,7 @@ def main
 		opts.parse!(ARGV)
 	end
 	
-	if not app_pathname
+	if not binary_pathname
 		raise "binary filepath not specified"
 	end
 	
@@ -239,11 +131,11 @@ def main
 		raise "destination directory path not specified"
 	end
 	
-	if app_pathname.relative?
-		app_pathname = app_pathname.realpath
+	if binary_pathname.relative?
+		binary_pathname = binary_pathname.realpath
 	end
 	
-	if not app_pathname.exist?
+	if not binary_pathname.exist?
 		raise "binary not found"
 	end
 	
@@ -252,11 +144,14 @@ def main
 	end
 	
 	bundle_pathname.mkpath
-	
-	bundle_used_libs(app_pathname.to_s, bundle_pathname.to_s, app_pathname.parent.to_s)
+
+	installed_libs = Array.new
+
+	binary = Binary.new(binary_pathname.to_s)
+	binary.bundle_dependency_libs(bundle_pathname.to_s, binary_pathname.parent.to_s, installed_libs)
 	
 	puts "Bundled libs:"
-	$bundled_lib_src_names.each do |name|
+	installed_libs.each do |name|
 		puts name
 	end
 	
