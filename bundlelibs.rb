@@ -95,7 +95,6 @@ class Binary
 					lib.copy!(dst)
 					FileUtils.chmod(0664, dst)
 					lib.bundle_dependency_libs(dst_dir, executable_dir, already_bundled_list)
-					puts src
 					already_bundled_list << src
 
 				end
